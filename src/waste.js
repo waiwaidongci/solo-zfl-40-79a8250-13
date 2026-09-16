@@ -24,12 +24,28 @@ export class ApiError extends Error {
   }
 }
 
-let seq = 0;
-function wbId(now) {
+const BARREL_ID_RE = /^WB-\d{8}-(\d+)$/;
+
+// 新桶编号必须从存量数据继续取：扫描全部已有桶编号的最大流水号 +1，
+// 保证服务重启/多进程场景下不与既有记录争用同一身份。
+// 旧数据若自带非标准编号（迁移不改编号），用存在性检查兜底防撞。
+export function nextBarrelId(db, now) {
   const d = new Date(now);
   const p = n => String(n).padStart(2, "0");
-  seq += 1;
-  return `WB-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${String(seq).padStart(3, "0")}`;
+  const datePart = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+  let maxSeq = 0;
+  for (const b of db.barrels || []) {
+    const m = typeof b.id === "string" && b.id.match(BARREL_ID_RE);
+    if (m) maxSeq = Math.max(maxSeq, Number(m[1]));
+  }
+  const existing = new Set((db.barrels || []).map(b => b.id));
+  let n = maxSeq + 1;
+  let id = `WB-${datePart}-${String(n).padStart(3, "0")}`;
+  while (existing.has(id)) {
+    n += 1;
+    id = `WB-${datePart}-${String(n).padStart(3, "0")}`;
+  }
+  return id;
 }
 
 const req = (input, key, label) => {
@@ -183,7 +199,7 @@ export function createBarrel(db, input, now = Date.now()) {
   const sourceStep = req(input, "sourceStep", "来源工序");
   const operator = req(input, "operator", "建档操作员");
   const barrel = {
-    id: wbId(now),
+    id: nextBarrelId(db, now),
     sourceBatch,
     sourceStep,
     sourceItemCode: input.sourceItemCode ? String(input.sourceItemCode).trim() : null,

@@ -29,12 +29,16 @@ function computeStats(items) {
 }
 
 // 在同一把全局写锁内完成 读库→业务变更→落盘，保证并发请求不互相覆盖。
+// 业务函数可能在落库冻结证据后再抛错（超温/温升/终点/过期/改动），
+// 因此必须用 finally 落盘：失败也要把冻结状态与证据持久化，不能留下还能继续操作的桶。
 async function mutate(dbPath, fn) {
   return withWriteLock(dbPath, async () => {
     const db = await loadDb(dbPath);
-    const out = await fn(db);
-    await saveDb(dbPath, db);
-    return out;
+    try {
+      return await fn(db);
+    } finally {
+      await saveDb(dbPath, db);
+    }
   });
 }
 
